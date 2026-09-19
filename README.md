@@ -31,13 +31,24 @@ Operating mobile devices from a terminal means four tools with four opinions:
 
 Requires Python 3.8+. Platform tools are only needed for the platforms you actually use.
 
+**As a CLI** (also installs the Claude Code skill, and is what you want if you plan to type `mdev` yourself):
+
 ```bash
 git clone https://github.com/roc-zjp/mobile-device-skill.git
 cd mobile-device-skill
 ./install.sh
 ```
 
-`install.sh` symlinks `mdev` into `~/.local/bin` and optionally installs the Claude Code skill. Nothing is copied, so `git pull` updates everything in place.
+`install.sh` symlinks `mdev` into `~/.local/bin` and offers to symlink the skill into `~/.claude/skills`. Nothing is copied, so `git pull` updates everything in place.
+
+**As a Claude Code plugin:**
+
+```
+/plugin marketplace add roc-zjp/mobile-device-skill
+/plugin install mobile-device
+```
+
+This gives the agent the skill, but does not put `mdev` on your own PATH — the agent invokes the script by path. Run `./install.sh` from the installed plugin directory if you want the command for yourself too.
 
 Prerequisites, as needed:
 

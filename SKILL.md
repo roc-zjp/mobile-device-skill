@@ -7,6 +7,8 @@ description: Operate connected Android and iOS devices - screenshot, screen reco
 
 The entry point is the `mdev` command. It does exactly three things: **discover devices, pick one, route a cross-platform verb to the native tool**. Long-tail operations are not in the script - look them up in the cheat sheets below and run the native command directly.
 
+**If `mdev` is not on PATH** (installed as a plugin without running `install.sh`), call `scripts/mdev` inside this skill's own directory instead - every example below works the same way.
+
 中文文档见 `docs/zh-CN/`。
 
 ## Always start with `mdev ls`

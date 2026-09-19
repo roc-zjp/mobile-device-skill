@@ -1,0 +1,22 @@
+{
+  "name": "mobile-device",
+  "version": "0.1.0",
+  "description": "One command for Android and iOS devices: screenshot, record, mirror, install apps, stream logs, read crash reports. Works as a standalone CLI and as a Claude Code skill, so an agent can see and drive real devices.",
+  "author": {
+    "name": "Roc"
+  },
+  "repository": "https://github.com/roc-zjp/mobile-device-skill",
+  "license": "MIT",
+  "keywords": [
+    "android",
+    "ios",
+    "adb",
+    "simulator",
+    "device",
+    "screenshot",
+    "logcat",
+    "mobile-development",
+    "agent-skill"
+  ],
+  "skills": "./"
+}

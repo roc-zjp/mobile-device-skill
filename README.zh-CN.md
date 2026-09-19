@@ -31,13 +31,24 @@ $ mdev shot
 
 需要 Python 3.8+。平台工具按需安装，只用哪端就装哪端。
 
+**作为 CLI**（同时装上 skill；你想自己敲 `mdev` 就选这条）：
+
 ```bash
 git clone https://github.com/roc-zjp/mobile-device-skill.git
 cd mobile-device-skill
 ./install.sh
 ```
 
-`install.sh` 把 `mdev` 软链到 `~/.local/bin`，并询问是否安装 Claude Code skill。全程软链不复制，所以 `git pull` 就能就地更新。
+`install.sh` 把 `mdev` 软链到 `~/.local/bin`，并询问是否把 skill 软链到 `~/.claude/skills`。全程软链不复制，所以 `git pull` 就能就地更新。
+
+**作为 Claude Code 插件：**
+
+```
+/plugin marketplace add roc-zjp/mobile-device-skill
+/plugin install mobile-device
+```
+
+这样 AI 拿到了 skill，但 `mdev` 不会进你自己的 PATH——代理是按路径调脚本的。想自己也能用这个命令，在插件安装目录下跑一次 `./install.sh`。
 
 按需安装的前置：
 
