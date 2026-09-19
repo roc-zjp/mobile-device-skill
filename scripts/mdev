@@ -1,0 +1,659 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+mdev - one command for Android and iOS devices.
+
+By design this is a THIN wrapper. It does exactly three things:
+discover devices, pick one, and route a cross-platform verb to the
+native tool. Everything else stays in the native commands documented
+in references/ - long-tail operations deliberately do not live here.
+
+  Android      -> adb, scrcpy
+  iOS Simulator-> xcrun simctl
+  iOS device   -> xcrun devicectl + pymobiledevice3
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unicodedata
+from pathlib import Path
+
+CACHE = Path.home() / ".cache" / "mdev"
+CURRENT_FILE = CACHE / "current"
+
+# Bilingual output: follows the shell locale, MDEV_LANG=zh|en forces it.
+_lang = os.environ.get("MDEV_LANG") or os.environ.get("LC_ALL") or os.environ.get("LANG") or ""
+ZH = "zh" in _lang.lower()
+
+
+def t(en, zh):
+    """Pick a message by locale. Kept inline so both languages stay in sync."""
+    return zh if ZH else en
+
+
+def pad(s, width):
+    """CJK glyphs occupy two terminal cells; %-10s counts characters and skews tables."""
+    s = str(s)
+    w = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+    return s + " " * max(0, width - w)
+
+
+# ---------------------------------------------------------------- tool lookup
+def _find_adb():
+    bases = [os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT"),
+             str(Path.home() / "Library/Android/sdk"),
+             str(Path.home() / "Android/Sdk")]
+    for base in filter(None, bases):
+        p = Path(base) / "platform-tools" / "adb"
+        if p.exists():
+            return str(p)
+    return shutil.which("adb")
+
+
+def _find_pmd3():
+    p = Path.home() / ".local/bin/pymobiledevice3"
+    if p.exists():
+        return str(p)
+    return shutil.which("pymobiledevice3")
+
+
+ADB = _find_adb()
+PMD3 = _find_pmd3()
+IS_MAC = sys.platform == "darwin"
+
+
+def sh(cmd, **kw):
+    """Run quietly, return (rc, stdout, stderr)."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, **kw)
+        return p.returncode, p.stdout, p.stderr
+    except FileNotFoundError:
+        return 127, "", "command not found: %s" % cmd[0]
+
+
+def run(cmd, **kw):
+    """Run in foreground with output passed through, return rc."""
+    try:
+        return subprocess.run(cmd, **kw).returncode
+    except FileNotFoundError:
+        die(t("command not found: %s", "命令不存在: %s") % cmd[0])
+    except KeyboardInterrupt:
+        return 130
+
+
+def die(msg, code=1):
+    print("x %s" % msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def devicectl_json(args, timeout=60):
+    """devicectl can only write JSON to a real file - /dev/stdout yields garbage."""
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        path = f.name
+    try:
+        sh(["xcrun", "devicectl"] + args + ["--json-output", path], timeout=timeout)
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------- discovery
+def android_devices():
+    if not ADB:
+        return []
+    rc, out, _ = sh([ADB, "devices", "-l"])
+    if rc != 0:
+        return []
+    devs = []
+    for line in out.splitlines()[1:]:
+        line = line.strip()
+        if not line or ("\t" not in line and " " not in line):
+            continue
+        parts = line.split()
+        serial, state = parts[0], parts[1]
+        if state != "device":
+            # Keep unauthorized/offline visible so the user knows why it is unusable.
+            devs.append({"platform": "android", "id": serial, "name": "(%s)" % state,
+                         "os": "?", "state": state})
+            continue
+        model = next((p.split(":", 1)[1] for p in parts if p.startswith("model:")), serial)
+        _, ver, _ = sh([ADB, "-s", serial, "shell", "getprop", "ro.build.version.release"])
+        devs.append({"platform": "android", "id": serial,
+                     "name": model.replace("_", " "), "os": ver.strip() or "?",
+                     "state": "device"})
+    return devs
+
+
+def ios_real_devices():
+    if not IS_MAC:
+        return []
+    data = devicectl_json(["list", "devices"])
+    if not data:
+        return []
+    devs = []
+    for d in data.get("result", {}).get("devices", []):
+        cp = d.get("connectionProperties", {})
+        # Everything ever paired shows up here; only 'connected' is actually reachable.
+        if cp.get("tunnelState") != "connected":
+            continue
+        hp = d.get("hardwareProperties", {})
+        dp = d.get("deviceProperties", {})
+        devs.append({"platform": "ios-real", "id": hp.get("udid", ""),
+                     "name": dp.get("name", "iOS device"),
+                     "os": dp.get("osVersionNumber", "?"),
+                     "state": cp.get("transportType", "connected"),
+                     "model": hp.get("marketingName", "")})
+    return devs
+
+
+def ios_sim_devices():
+    if not IS_MAC:
+        return []
+    rc, out, _ = sh(["xcrun", "simctl", "list", "devices", "booted", "-j"])
+    if rc != 0:
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return []
+    devs = []
+    for runtime, items in data.get("devices", {}).items():
+        ver = runtime.split("SimRuntime.")[-1].replace("iOS-", "").replace("-", ".")
+        for d in items:
+            if d.get("state") != "Booted":
+                continue
+            devs.append({"platform": "ios-sim", "id": d.get("udid", ""),
+                         "name": d.get("name", "Simulator"), "os": ver, "state": "Booted"})
+    return devs
+
+
+def discover():
+    """All online devices, each tagged with a short id (a1 / s1 / i1)."""
+    devs = android_devices() + ios_sim_devices() + ios_real_devices()
+    counters = {"android": 0, "ios-sim": 0, "ios-real": 0}
+    prefix = {"android": "a", "ios-sim": "s", "ios-real": "i"}
+    for d in devs:
+        counters[d["platform"]] += 1
+        d["sid"] = "%s%d" % (prefix[d["platform"]], counters[d["platform"]])
+    return devs
+
+
+# ---------------------------------------------------------------- selection
+def want_device(args):
+    """-d works both before and after the subcommand."""
+    return getattr(args, "device", None) or getattr(args, "gdevice", None)
+
+
+def resolve(want=None):
+    """Priority: -d > MDEV_DEVICE > remembered by `mdev use` > the only device online."""
+    devs = discover()
+    if not devs:
+        die(t("No device found. For Android check USB debugging authorization; "
+              "for iOS check the cable and the 'Trust This Computer' prompt.",
+              "没有发现任何在线设备。Android 查 USB 调试授权，iOS 查数据线和「信任此电脑」。"))
+
+    want = want or os.environ.get("MDEV_DEVICE")
+    if not want and CURRENT_FILE.exists():
+        remembered = CURRENT_FILE.read_text().strip()
+        if remembered:
+            hit = _match(devs, remembered)
+            if hit:
+                return hit
+            # Remembered device went away: fall through to auto-select instead of failing.
+
+    if want:
+        hit = _match(devs, want)
+        if not hit:
+            print_devices(devs)
+            die(t("No online device matches '%s'", "没有匹配「%s」的在线设备") % want)
+        return hit
+
+    if len(devs) == 1:
+        return devs[0]
+
+    print_devices(devs)
+    die(t("%d devices online. Pick one with `mdev use <ID>`, or pass -d <ID>.",
+          "有 %d 台设备在线，用 `mdev use <ID>` 选一台，或加 -d <ID> 临时指定") % len(devs))
+
+
+def _match(devs, want):
+    w = want.strip().lower()
+    for d in devs:                                    # exact: short id or full udid
+        if w == d["sid"] or w == d["id"].lower():
+            return d
+    for d in devs:                                    # fuzzy: udid prefix or name substring
+        if d["id"].lower().startswith(w) or w in d["name"].lower():
+            return d
+    return None
+
+
+def platform_label(p):
+    return {"android": t("Android", "Android"),
+            "ios-sim": t("iOS Sim", "iOS 模拟器"),
+            "ios-real": t("iOS device", "iOS 真机")}[p]
+
+
+def print_devices(devs):
+    if not devs:
+        print(t("(no device online)", "（没有在线设备）"))
+        return
+    cur = CURRENT_FILE.read_text().strip() if CURRENT_FILE.exists() else ""
+    print("%s %s %s %s %s" % (pad("ID", 4), pad(t("PLATFORM", "平台"), 12),
+                              pad(t("NAME", "名称"), 24), pad(t("OS", "系统"), 9),
+                              t("IDENTIFIER", "标识")))
+    print("-" * 80)
+    for d in devs:
+        mark = ">" if d["sid"] == cur or d["id"] == cur else " "
+        print("%s%s %s %s %s %s" % (
+            mark, pad(d["sid"], 3), pad(platform_label(d["platform"]), 12),
+            pad(d["name"][:22], 24), pad(d["os"], 9), d["id"][:28]))
+
+
+# ---------------------------------------------------------------- actions
+def out_path(given, ext, dev):
+    if given:
+        return str(Path(given).expanduser().resolve())
+    name = "".join(c for c in dev["name"] if c.isalnum() or c in "-_") or dev["platform"]
+    return str(Path.cwd() / ("%s-%s.%s" % (name, time.strftime("%m%d-%H%M%S"), ext)))
+
+
+def cmd_shot(args):
+    dev = resolve(want_device(args))
+    out = out_path(args.output, "png", dev)
+    p = dev["platform"]
+    if p == "android":
+        # exec-out, not shell: shell mangles the binary stream on some devices.
+        with open(out, "wb") as f:
+            rc = subprocess.run([ADB, "-s", dev["id"], "exec-out", "screencap", "-p"],
+                                stdout=f).returncode
+    elif p == "ios-sim":
+        rc, _, _ = sh(["xcrun", "simctl", "io", dev["id"], "screenshot", out])
+    else:
+        if not PMD3:
+            die(t("pymobiledevice3 required: pipx install pymobiledevice3",
+                  "需要 pymobiledevice3：pipx install pymobiledevice3"))
+        # --userspace builds the iOS 17+ tunnel in-process, no root needed.
+        # It cannot target a specific device; see references/ios.md for multi-device setups.
+        rc = run([PMD3, "developer", "dvt", "screenshot", out, "--userspace"])
+    if rc != 0 or not Path(out).exists() or Path(out).stat().st_size == 0:
+        die(t("Screenshot failed (is the device unlocked and awake?)",
+              "截图失败（设备是否已解锁亮屏？）"))
+    size = Path(out).stat().st_size
+    print("* %s  (%.1f MB)" % (out, size / 1048576))
+    if p == "ios-real" and size < 200000:
+        print(t("  ! Suspiciously small - most likely a black screenshot of a locked device.",
+                "  ! 文件偏小，大概率是熄屏黑图——解锁设备后重截"))
+
+
+def cmd_rec(args):
+    dev = resolve(want_device(args))
+    out = out_path(args.output, "mp4", dev)
+    p = dev["platform"]
+    if p == "android":
+        remote = "/sdcard/mdev-rec.mp4"
+        limit = str(args.time or 180)
+        print(t("Recording, Ctrl+C to stop (max %s s)...",
+                "录制中，Ctrl+C 停止（最长 %s 秒）…") % limit)
+        run([ADB, "-s", dev["id"], "shell", "screenrecord", "--time-limit", limit, remote])
+        time.sleep(1)               # give the device a moment to flush, or the pull truncates
+        run([ADB, "-s", dev["id"], "pull", remote, out])
+        sh([ADB, "-s", dev["id"], "shell", "rm", remote])
+    elif p == "ios-sim":
+        print(t("Recording, Ctrl+C to stop...", "录制中，Ctrl+C 停止…"))
+        run(["xcrun", "simctl", "io", dev["id"], "recordVideo", out])
+    else:
+        die(t("No CLI screen recording for physical iOS devices. Use QuickTime Player:\n"
+              "  File > New Movie Recording > click the chevron next to Record > pick the device",
+              "iOS 真机没有 CLI 录屏通道。用 QuickTime：\n"
+              "  文件 → 新建影片录制 → 录制键旁的 ∨ 选设备"))
+    if Path(out).exists():
+        print("* %s" % out)
+
+
+def cmd_mirror(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    if p == "android":
+        if not shutil.which("scrcpy"):
+            die(t("scrcpy required: brew install scrcpy", "需要 scrcpy：brew install scrcpy"))
+        run(["scrcpy", "-s", dev["id"]])
+    elif p == "ios-sim":
+        run(["open", "-a", "Simulator"])
+        print(t("* Simulator window raised", "* 已唤起模拟器窗口"))
+    else:
+        die(t("Physical iOS devices cannot be mirrored and controlled from the CLI.\n"
+              "  Read-only mirror: QuickTime Player movie recording.\n"
+              "  Interactive: macOS iPhone Mirroring (iPhone only, no iPad).",
+              "iOS 真机无法从命令行镜像并控制。只读镜像用 QuickTime 影片录制；\n"
+              "  iPhone（不支持 iPad）可用 macOS「iPhone 镜像」App"))
+
+
+def cmd_info(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    print("%s / %s / %s" % (platform_label(p), dev["name"], dev["id"]))
+    print("-" * 60)
+    if p == "android":
+        props = [(t("Model", "型号"), "ro.product.model"),
+                 (t("Vendor", "厂商"), "ro.product.manufacturer"),
+                 (t("OS", "系统版本"), "ro.build.version.release"),
+                 (t("SDK", "SDK"), "ro.build.version.sdk"),
+                 (t("ABI", "ABI"), "ro.product.cpu.abi"),
+                 (t("Fingerprint", "指纹"), "ro.build.fingerprint")]
+        for label, key in props:
+            _, v, _ = sh([ADB, "-s", dev["id"], "shell", "getprop", key])
+            print("%s %s" % (pad(label, 12), v.strip()))
+        _, size, _ = sh([ADB, "-s", dev["id"], "shell", "wm", "size"])
+        _, dens, _ = sh([ADB, "-s", dev["id"], "shell", "wm", "density"])
+        print("%s %s" % (pad(t("Screen", "分辨率"), 12),
+                         size.strip().replace("Physical size: ", "")))
+        print("%s %s" % (pad(t("Density", "密度"), 12),
+                         dens.strip().replace("Physical density: ", "")))
+        _, bat, _ = sh([ADB, "-s", dev["id"], "shell", "dumpsys", "battery"])
+        lvl = next((l.split(":")[1].strip() for l in bat.splitlines() if "level" in l), "?")
+        print("%s %s%%" % (pad(t("Battery", "电量"), 12), lvl))
+    elif p == "ios-sim":
+        run(["xcrun", "simctl", "list", "devices", dev["id"]])
+    else:
+        data = devicectl_json(["device", "info", "details", "--device", dev["id"]])
+        if not data:
+            die(t("Query failed", "查询失败"))
+        r = data.get("result", {})
+        dp, hp = r.get("deviceProperties", {}), r.get("hardwareProperties", {})
+        rows = [(t("Model", "型号"), hp.get("marketingName")),
+                (t("Identifier", "标识"), hp.get("productType")),
+                (t("OS", "系统版本"), dp.get("osVersionNumber")),
+                (t("Build", "构建号"), dp.get("osBuildUpdate")),
+                (t("CPU", "芯片"), hp.get("cpuType", {}).get("name")),
+                (t("UDID", "UDID"), hp.get("udid")),
+                (t("Dev mode", "开发者模式"), dp.get("developerModeStatus"))]
+        for label, v in rows:
+            print("%s %s" % (pad(label, 14), v))
+
+
+def cmd_apps(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    tail = "" if args.all else t(" (user apps, -a for all)", "（用户应用，-a 看全部）")
+    if p == "android":
+        cmd = [ADB, "-s", dev["id"], "shell", "pm", "list", "packages"]
+        if not args.all:
+            cmd.append("-3")
+        _, out, _ = sh(cmd)
+        pkgs = sorted(l.replace("package:", "").strip() for l in out.splitlines() if l.strip())
+        for pkg in pkgs:
+            print(pkg)
+        print(t("- %d total%s", "— 共 %d 个%s") % (len(pkgs), tail))
+    elif p == "ios-sim":
+        _, out, _ = sh(["xcrun", "simctl", "listapps", dev["id"]])
+        conv = subprocess.run(["plutil", "-convert", "json", "-o", "-", "-"],
+                              input=out, capture_output=True, text=True)
+        try:
+            data = json.loads(conv.stdout)
+        except json.JSONDecodeError:
+            print(out)                 # fall back to raw plist rather than showing nothing
+            return
+        rows = [(b, m) for b, m in data.items()
+                if args.all or m.get("ApplicationType") == "User"]
+        for bid, m in sorted(rows):
+            print("%-45s %s" % (bid, m.get("CFBundleDisplayName") or m.get("CFBundleName", "")))
+        print(t("- %d total%s", "— 共 %d 个%s") % (len(rows), tail))
+    else:
+        extra = ["--include-all-apps"] if args.all else []
+        data = devicectl_json(["device", "info", "apps", "--device", dev["id"]] + extra)
+        if not data:
+            die(t("Query failed", "查询失败"))
+        apps = data.get("result", {}).get("apps", [])
+        for a in sorted(apps, key=lambda x: x.get("bundleIdentifier") or ""):
+            print("%-45s %s" % (a.get("bundleIdentifier"), a.get("name", "")))
+        print(t("- %d total%s", "— 共 %d 个%s") % (len(apps), tail))
+
+
+def cmd_install(args):
+    dev = resolve(want_device(args))
+    f = Path(args.file).expanduser().resolve()
+    if not f.exists():
+        die(t("No such file: %s", "文件不存在: %s") % f)
+    p, suffix = dev["platform"], f.suffix.lower()
+    if p == "android":
+        if suffix != ".apk":
+            die(t("Android needs an .apk, got %s", "Android 设备需要 .apk，给的是 %s") % suffix)
+        rc = run([ADB, "-s", dev["id"], "install", "-r", "-d", str(f)])
+    elif p == "ios-sim":
+        if suffix != ".app":
+            die(t("Simulator needs a .app bundle (not .ipa)", "模拟器需要 .app 目录（不是 .ipa）"))
+        rc = run(["xcrun", "simctl", "install", dev["id"], str(f)])
+    else:
+        if suffix not in (".ipa", ".app"):
+            die(t("Physical device needs .ipa or .app", "真机需要 .ipa 或 .app"))
+        rc = run(["xcrun", "devicectl", "device", "install", "app",
+                  "--device", dev["id"], str(f)])
+    sys.exit(rc)
+
+
+def cmd_uninstall(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    if p == "android":
+        rc = run([ADB, "-s", dev["id"], "uninstall", args.package])
+    elif p == "ios-sim":
+        rc = run(["xcrun", "simctl", "uninstall", dev["id"], args.package])
+    else:
+        rc = run(["xcrun", "devicectl", "device", "uninstall", "app",
+                  "--device", dev["id"], args.package])
+    sys.exit(rc)
+
+
+def cmd_launch(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    if p == "android":
+        # monkey launches by package alone - no need to know the launcher Activity.
+        rc = run([ADB, "-s", dev["id"], "shell", "monkey", "-p", args.package,
+                  "-c", "android.intent.category.LAUNCHER", "1"])
+    elif p == "ios-sim":
+        rc = run(["xcrun", "simctl", "launch", dev["id"], args.package])
+    else:
+        rc = run(["xcrun", "devicectl", "device", "process", "launch",
+                  "--device", dev["id"], args.package])
+    sys.exit(rc)
+
+
+def cmd_stop(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    if p == "android":
+        rc = run([ADB, "-s", dev["id"], "shell", "am", "force-stop", args.package])
+    elif p == "ios-sim":
+        rc = run(["xcrun", "simctl", "terminate", dev["id"], args.package])
+    else:
+        die(t("Cannot kill an app by bundle id on a physical iOS device "
+              "(devicectl can launch, not terminate).",
+              "iOS 真机无法从命令行结束进程（devicectl 只能启动，不能按 Bundle ID 杀）"))
+    sys.exit(rc)
+
+
+def cmd_log(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    if p == "android":
+        if args.clear:
+            sh([ADB, "-s", dev["id"], "logcat", "-c"])
+        cmd = [ADB, "-s", dev["id"], "logcat", "-v", "time"]
+        if args.grep:
+            cmd += ["-e", args.grep]
+        run(cmd)
+    elif p == "ios-sim":
+        cmd = ["xcrun", "simctl", "spawn", dev["id"], "log", "stream", "--style", "compact"]
+        if args.grep:
+            cmd += ["--predicate", 'eventMessage CONTAINS "%s"' % args.grep]
+        run(cmd)
+    else:
+        if not PMD3:
+            die(t("pymobiledevice3 required", "需要 pymobiledevice3"))
+        cmd = [PMD3, "syslog", "live", "--udid", dev["id"]]
+        if args.grep:
+            cmd += ["-m", args.grep]
+        run(cmd)
+
+
+def cmd_crash(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    if p == "android":
+        run([ADB, "-s", dev["id"], "logcat", "-b", "crash", "-d"])
+    elif p == "ios-sim":
+        d = Path.home() / "Library/Logs/DiagnosticReports"
+        print(t("Simulator crash logs live on the host: %s",
+                "模拟器崩溃日志在宿主机：%s") % d)
+        run(["ls", "-lt", str(d)])
+    else:
+        if not PMD3:
+            die(t("pymobiledevice3 required", "需要 pymobiledevice3"))
+        if args.pull:
+            dest = Path(args.pull).expanduser().resolve()
+            dest.mkdir(parents=True, exist_ok=True)
+            run([PMD3, "crash", "pull", str(dest), "--udid", dev["id"]])
+            print(t("* pulled to %s", "* 已拉取到 %s") % dest)
+        else:
+            run([PMD3, "crash", "ls", "--udid", dev["id"]])
+
+
+def cmd_url(args):
+    dev = resolve(want_device(args))
+    p = dev["platform"]
+    if p == "android":
+        rc = run([ADB, "-s", dev["id"], "shell", "am", "start",
+                  "-a", "android.intent.action.VIEW", "-d", args.url])
+    elif p == "ios-sim":
+        rc = run(["xcrun", "simctl", "openurl", dev["id"], args.url])
+    else:
+        die(t("No way to open a URL on a physical iOS device (devicectl has no open command).",
+              "iOS 真机没有打开 URL 的命令行通道（devicectl 无 open 子命令）"))
+    sys.exit(rc)
+
+
+def cmd_shell(args):
+    dev = resolve(want_device(args))
+    if dev["platform"] != "android":
+        die(t("shell is Android-only (current device is %s)",
+              "shell 只对 Android 有效（当前是 %s）") % platform_label(dev["platform"]))
+    sys.exit(run([ADB, "-s", dev["id"], "shell"] + args.args))
+
+
+def cmd_ls(args):
+    print_devices(discover())
+
+
+def cmd_use(args):
+    devs = discover()
+    hit = _match(devs, args.device)
+    if not hit:
+        print_devices(devs)
+        die(t("No online device matches '%s'", "没有匹配「%s」的在线设备") % args.device)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    CURRENT_FILE.write_text(hit["sid"])
+    print(t("* current device: %s %s (%s)", "* 当前设备：%s %s（%s）")
+          % (hit["sid"], hit["name"], platform_label(hit["platform"])))
+
+
+# ---------------------------------------------------------------- entry point
+def main():
+    ap = argparse.ArgumentParser(
+        prog="mdev",
+        description=t("One command for Android and iOS devices",
+                      "一条命令操作 Android / iOS 设备"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=t("Device priority: -d > MDEV_DEVICE > `mdev use` > the only device online",
+                 "设备选择顺序：-d 参数 > MDEV_DEVICE > mdev use 记住的 > 唯一在线设备"))
+    dev_help = t("device id (a1/s1/i1), name fragment, or UDID prefix",
+                 "设备 ID（a1/s1/i1）、名称片段或 UDID 前缀")
+    ap.add_argument("-d", "--device", dest="gdevice", help=dev_help)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-d", "--device", dest="device", default=None, help=dev_help)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("ls", help=t("list online devices", "列出所有在线设备")).set_defaults(func=cmd_ls)
+
+    p = sub.add_parser("use", help=t("remember a default device", "记住默认设备"))
+    p.add_argument("device")
+    p.set_defaults(func=cmd_use)
+
+    p = sub.add_parser("shot", parents=[common], help=t("screenshot", "截图"))
+    p.add_argument("-o", "--output", help=t("output path, defaults to cwd", "输出路径，默认当前目录"))
+    p.set_defaults(func=cmd_shot)
+
+    p = sub.add_parser("rec", parents=[common],
+                       help=t("screen record (not on physical iOS)", "录屏（真机 iOS 不支持）"))
+    p.add_argument("-o", "--output")
+    p.add_argument("-t", "--time", type=int, help=t("max seconds, Android only", "最长秒数，仅 Android"))
+    p.set_defaults(func=cmd_rec)
+
+    sub.add_parser("mirror", parents=[common],
+                   help=t("mirror the screen", "投屏/镜像窗口")).set_defaults(func=cmd_mirror)
+    sub.add_parser("info", parents=[common],
+                   help=t("device details", "设备详情")).set_defaults(func=cmd_info)
+
+    p = sub.add_parser("apps", parents=[common], help=t("list installed apps", "列出已安装应用"))
+    p.add_argument("-a", "--all", action="store_true",
+                   help=t("include system apps", "含系统应用"))
+    p.set_defaults(func=cmd_apps)
+
+    p = sub.add_parser("install", parents=[common], help=t("install apk/ipa/app", "安装 apk/ipa/app"))
+    p.add_argument("file")
+    p.set_defaults(func=cmd_install)
+
+    p = sub.add_parser("uninstall", parents=[common], help=t("uninstall", "卸载"))
+    p.add_argument("package")
+    p.set_defaults(func=cmd_uninstall)
+
+    p = sub.add_parser("launch", parents=[common], help=t("launch an app", "启动应用"))
+    p.add_argument("package")
+    p.set_defaults(func=cmd_launch)
+
+    p = sub.add_parser("stop", parents=[common],
+                       help=t("force stop (not on physical iOS)", "强停应用（真机 iOS 不支持）"))
+    p.add_argument("package")
+    p.set_defaults(func=cmd_stop)
+
+    p = sub.add_parser("log", parents=[common], help=t("live logs", "实时日志"))
+    p.add_argument("-g", "--grep", help=t("filter keyword", "过滤关键词"))
+    p.add_argument("-c", "--clear", action="store_true",
+                   help=t("clear buffer first, Android only", "先清缓冲区，仅 Android"))
+    p.set_defaults(func=cmd_log)
+
+    p = sub.add_parser("crash", parents=[common], help=t("crash logs", "崩溃日志"))
+    p.add_argument("--pull", metavar="DIR",
+                   help=t("pull into a directory, physical iOS only", "拉取到目录，仅 iOS 真机"))
+    p.set_defaults(func=cmd_crash)
+
+    p = sub.add_parser("url", parents=[common],
+                       help=t("open a deeplink (not on physical iOS)", "打开深链（真机 iOS 不支持）"))
+    p.add_argument("url")
+    p.set_defaults(func=cmd_url)
+
+    p = sub.add_parser("shell", parents=[common],
+                       help=t("pass through to adb shell, Android only", "透传 adb shell，仅 Android"))
+    p.add_argument("args", nargs=argparse.REMAINDER)
+    p.set_defaults(func=cmd_shell)
+
+    args = ap.parse_args()
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()

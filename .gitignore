@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# screenshots / recordings mdev drops into the working directory
+/*.png
+/*.mp4
