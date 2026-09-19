@@ -47,7 +47,8 @@ if [ "$WANT_SKILL" = "yes" ]; then
   mkdir -p "$(dirname "$SKILL_DIR")"
   if [ -e "$SKILL_DIR" ] && [ ! -L "$SKILL_DIR" ]; then
     # A real directory is already there - never delete it silently.
-    backup="$SKILL_DIR.backup-$(date +%Y%m%d-%H%M%S)"
+    # Back it up OUTSIDE skills/, or Claude Code loads the backup as a second skill.
+    backup="$HOME/.claude/mobile-device.backup-$(date +%Y%m%d-%H%M%S)"
     mv "$SKILL_DIR" "$backup"
     echo "  ! existing directory moved to $backup"
   fi
