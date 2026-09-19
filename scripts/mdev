@@ -364,7 +364,14 @@ def cmd_info(args):
         lvl = next((l.split(":")[1].strip() for l in bat.splitlines() if "level" in l), "?")
         print("%s %s%%" % (pad(t("Battery", "电量"), 12), lvl))
     elif p == "ios-sim":
-        run(["xcrun", "simctl", "list", "devices", dev["id"]])
+        data_dir = Path.home() / "Library/Developer/CoreSimulator/Devices" / dev["id"]
+        rows = [(t("Name", "名称"), dev["name"]),
+                (t("OS", "系统版本"), dev["os"]),
+                (t("State", "状态"), dev["state"]),
+                (t("UDID", "UDID"), dev["id"]),
+                (t("Data", "数据目录"), str(data_dir) if data_dir.exists() else "-")]
+        for label, v in rows:
+            print("%s %s" % (pad(label, 14), v))
     else:
         data = devicectl_json(["device", "info", "details", "--device", dev["id"]])
         if not data:
