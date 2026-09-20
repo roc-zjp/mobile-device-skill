@@ -41,6 +41,46 @@ ID   平台         名称                     系统      标识
 | `mdev url <deeplink>` | 打开深链（iOS 真机不支持） |
 | `mdev shell <命令>` | 透传 adb shell，仅 Android |
 
+## 典型工作流
+
+**在真机上验证一处改动** —— 最常用的一条：
+
+```bash
+mdev install build.apk          # 按设备平台校验扩展名
+mdev launch com.example.app
+mdev shot                       # 打印绝对路径
+```
+
+然后**用 Read 打开打印出来的路径**。这一步才是真正「看见」界面的动作，也是最容易被跳过的一步。`launch` 回报 `Launched application` 只说明命令没报错——它不能说明界面渲染出来了、应用没在启动时崩掉、也不能说明有没有弹窗盖住整个屏幕。只有截图能。
+
+**看某个应用现在是什么样**（不需要装包）：
+
+```bash
+mdev apps                       # 拿到准确的 bundle id / 包名，别猜
+mdev launch <id>
+mdev shot
+```
+
+**追一个崩溃：**
+
+```bash
+mdev crash                      # 最近的崩溃报告
+mdev crash --pull ./crashes     # iOS 真机：把 .ips 文件拉到本地
+mdev log -g <关键词>             # 或者实时抓，Ctrl+C 停止
+```
+
+**双端对比** —— 同一个界面，两台设备：
+
+```bash
+mdev ls
+mdev -d a1 shot -o android.png
+mdev -d i1 shot -o ios.png
+```
+
+把两个路径都 Read 出来并排看。
+
+**iOS 真机截图前，屏幕必须已解锁亮起。** 锁屏状态下截图会「成功」并写出一张纯黑图。当 `mdev shot` 警告文件偏小时，让用户唤醒设备——不要循环重试，也不要去排查隧道。
+
 ## 能力边界（先看这张表，别试做不到的事）
 
 | 能力 | Android | iOS 模拟器 | iOS 真机 |

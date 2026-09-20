@@ -44,6 +44,46 @@ Matching accepts short id, name fragment, or UDID prefix - `mdev -d Pixel shot` 
 | `mdev url <deeplink>` | Open a deep link (not on physical iOS) |
 | `mdev shell <cmd>` | Pass through to `adb shell`, Android only |
 
+## Typical workflows
+
+**Verify a change on a real device** — the most common one:
+
+```bash
+mdev install build.apk          # extension is matched against the device platform
+mdev launch com.example.app
+mdev shot                       # prints an absolute path
+```
+
+Then **Read the printed path.** That is the step that actually shows you the screen, and it is the one most easily skipped. `launch` reporting `Launched application` only means the command succeeded — it says nothing about whether the UI rendered, whether the app crashed on start, or whether a dialog is covering everything. Only the screenshot does.
+
+**Inspect what an app is showing right now** (nothing to install):
+
+```bash
+mdev apps                       # get the exact bundle id / package name - do not guess it
+mdev launch <id>
+mdev shot
+```
+
+**Chase a crash:**
+
+```bash
+mdev crash                      # recent crash reports
+mdev crash --pull ./crashes     # physical iOS: pull the .ips files out
+mdev log -g <keyword>           # or catch it live; Ctrl+C stops the stream
+```
+
+**Compare both platforms** — same screen, two devices:
+
+```bash
+mdev ls
+mdev -d a1 shot -o android.png
+mdev -d i1 shot -o ios.png
+```
+
+Read both paths and compare them side by side.
+
+**A physical iOS device must be unlocked and awake before any screenshot.** A locked one returns success and writes a solid black image. When `mdev shot` warns that the file is suspiciously small, ask the user to wake the device — do not retry in a loop and do not start debugging the tunnel.
+
 ## Capability matrix - check this before attempting something impossible
 
 | Capability | Android | iOS Simulator | Physical iOS |
