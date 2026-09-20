@@ -5,3 +5,10 @@ __pycache__/
 # screenshots / recordings mdev drops into the working directory
 /*.png
 /*.mp4
+
+# Ideas 工作区的项目级文档：内部决策记录，不进开源仓库。
+# 想公开时先把里面对个人环境的表述改写成通用说明，再从这里删掉对应行。
+/CLAUDE.md
+/docs/spec.md
+/docs/issues.md
+/docs/decisions/
