@@ -327,7 +327,14 @@ def cmd_mirror(args):
     p = dev["platform"]
     if p == "android":
         if not shutil.which("scrcpy"):
-            die(t("scrcpy required: brew install scrcpy", "需要 scrcpy：brew install scrcpy"))
+            # scrcpy is the only CLI way to mirror *and* control Android. Without
+            # it the screen is still reachable, just not interactive.
+            die(t("scrcpy not found. Install it with:  brew install scrcpy\n"
+                  "  Only `mirror` needs it - every other command works without it.\n"
+                  "  To just see the screen: `mdev shot` for a still, `mdev rec` for a clip.",
+                  "没找到 scrcpy，安装：brew install scrcpy\n"
+                  "  只有 mirror 需要它，其余命令都不受影响。\n"
+                  "  只是想看画面的话：`mdev shot` 截一张，`mdev rec` 录一段。"))
         run(["scrcpy", "-s", dev["id"]])
     elif p == "ios-sim":
         run(["open", "-a", "Simulator"])
