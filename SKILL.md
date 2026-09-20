@@ -93,7 +93,7 @@ Read both paths and compare them side by side.
 | Live logs / crash logs | yes | yes | yes |
 | Screen recording | yes | yes | **no** - QuickTime only |
 | Mirror and control with a mouse | yes (scrcpy) | yes (native window) | **no** |
-| Force stop an app | yes | yes | **no** - devicectl launches but cannot terminate |
+| Force stop an app | yes | yes | yes - via pymobiledevice3's DVT channel, not devicectl |
 | Open a deeplink | yes | yes | **no** - devicectl has no open subcommand |
 | Tap / swipe / type text | yes (`adb input`, see references/android.md) | no native CLI | **no** - needs WebDriverAgent, deliberately not supported |
 

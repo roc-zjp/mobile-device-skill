@@ -93,7 +93,7 @@ mdev shell getprop           # 透传 adb shell
 | 实时日志 / 崩溃日志 | ✅ | ✅ | ✅ |
 | 录屏 | ✅ | ✅ | ❌ 只能 QuickTime |
 | 投屏 + 鼠标操作 | ✅ scrcpy | ✅ | ❌ |
-| 强停应用 | ✅ | ✅ | ❌ |
+| 强停应用 | ✅ | ✅ | ✅ |
 | 打开深链 | ✅ | ✅ | ❌ |
 | 点击 / 滑动 / 输入 | ✅ `adb input` | ❌ 无原生 CLI | ❌ 需 WebDriverAgent |
 

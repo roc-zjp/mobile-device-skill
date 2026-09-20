@@ -77,7 +77,8 @@ xcrun devicectl device sysdiagnose --device <UDID> --output ./    # huge and slo
 ```
 
 Full subcommand list: `copy`, `info`, `install`, `notification`, `orientation`, `process`, `reboot`, `sysdiagnose`, `uninstall`.
-devicectl has **no screenshot, no open-url, and no way to kill an app by bundle id**. Stop looking for them.
+devicectl has **no screenshot, no open-url, and no way to kill an app by bundle id**. Stop looking for them there —
+screenshots and process termination both live in `pymobiledevice3` instead (see below).
 
 Installing an `.ipa` requires the signature to match the device - the provisioning profile must list this device's UDID. Signing failures here are not a tooling problem.
 
@@ -92,6 +93,12 @@ pymobiledevice3 usbmux list                     # JSON list of USB devices, give
 
 # Screenshot: --userspace is mandatory. iOS 17+ tunnel built in-process, no sudo, ~3s
 pymobiledevice3 developer dvt screenshot out.png --userspace
+
+# Process control - also over the tunnel, so --userspace applies here too
+pymobiledevice3 developer dvt proclist --userspace                             # running processes
+pymobiledevice3 developer dvt process-id-for-bundle-id <BundleID> --userspace  # pid, or 0 when not running
+pymobiledevice3 developer dvt kill <PID> --userspace                           # terminate it
+pymobiledevice3 developer dvt pkill <name> --userspace                         # by name fragment
 
 pymobiledevice3 syslog live --udid <UDID>
 pymobiledevice3 syslog live --udid <UDID> -m "keyword"

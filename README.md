@@ -93,7 +93,7 @@ Checked before you try something that cannot work:
 | Live logs / crash logs | ✅ | ✅ | ✅ |
 | Screen recording | ✅ | ✅ | ❌ QuickTime only |
 | Mirror + mouse control | ✅ scrcpy | ✅ | ❌ |
-| Force stop | ✅ | ✅ | ❌ |
+| Force stop | ✅ | ✅ | ✅ |
 | Open deeplink | ✅ | ✅ | ❌ |
 | Tap / swipe / type | ✅ `adb input` | ❌ no native CLI | ❌ needs WebDriverAgent |
 

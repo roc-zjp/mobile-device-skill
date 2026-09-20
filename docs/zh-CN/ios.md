@@ -76,7 +76,8 @@ xcrun devicectl device reboot --device <UDID>
 xcrun devicectl device sysdiagnose --device <UDID> --output ./    # 完整系统诊断包，很大很慢
 ```
 
-`devicectl` **没有** screenshot、没有 open url、没有按 BundleID 杀进程。别找了。
+`devicectl` **没有** screenshot、没有 open url、没有按 BundleID 杀进程——别在它身上找了，
+截图和结束进程这两件事都在 `pymobiledevice3` 那边（见下）。
 
 安装 `.ipa` 要求签名与设备匹配（开发证书的 provisioning profile 里必须含这台设备的 UDID），否则报签名错误，与工具无关。
 
@@ -91,6 +92,12 @@ pymobiledevice3 usbmux list                     # JSON 列 USB 设备，拿 Uniq
 
 # 截图：必须用 --userspace，iOS 17+ 的 RemoteXPC 隧道在进程内建，无需 sudo，约 3 秒
 pymobiledevice3 developer dvt screenshot out.png --userspace
+
+# 进程控制——同样走隧道，所以 --userspace 一样适用
+pymobiledevice3 developer dvt proclist --userspace                             # 运行中的进程
+pymobiledevice3 developer dvt process-id-for-bundle-id <BundleID> --userspace  # 取 PID，返回 0 表示没在运行
+pymobiledevice3 developer dvt kill <PID> --userspace                           # 结束进程
+pymobiledevice3 developer dvt pkill <名字片段> --userspace                      # 按名字杀
 
 pymobiledevice3 syslog live --udid <UDID>              # 实时系统日志
 pymobiledevice3 syslog live --udid <UDID> -m "关键词"   # 过滤

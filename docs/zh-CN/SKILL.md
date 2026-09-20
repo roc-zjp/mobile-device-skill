@@ -90,7 +90,7 @@ mdev -d i1 shot -o ios.png
 | 实时日志 / 崩溃日志 | ✅ | ✅ | ✅ |
 | 录屏 | ✅ | ✅ | ❌ 只能 QuickTime 影片录制 |
 | 投屏并用鼠标操作 | ✅ scrcpy | ✅ 原生窗口 | ❌ |
-| 强停应用 | ✅ | ✅ | ❌ devicectl 只能启动不能杀 |
+| 强停应用 | ✅ | ✅ | ✅ 走 pymobiledevice3 的 DVT 通道，不是 devicectl |
 | 打开 deeplink | ✅ | ✅ | ❌ devicectl 无 open 子命令 |
 | 点击 / 滑动 / 输入文本 | ✅ `adb input`（见 references/android.md） | ⚠️ 无原生 CLI | ❌ 需 WebDriverAgent，**已决定不做** |
 

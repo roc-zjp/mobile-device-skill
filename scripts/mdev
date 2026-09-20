@@ -485,9 +485,18 @@ def cmd_stop(args):
     elif p == "ios-sim":
         rc = run(["xcrun", "simctl", "terminate", dev["id"], args.package])
     else:
-        die(t("Cannot kill an app by bundle id on a physical iOS device "
-              "(devicectl can launch, not terminate).",
-              "iOS 真机无法从命令行结束进程（devicectl 只能启动，不能按 Bundle ID 杀）"))
+        if not PMD3:
+            die(t("pymobiledevice3 required", "需要 pymobiledevice3"))
+        # devicectl cannot terminate, but pymobiledevice3's DVT channel can:
+        # resolve the bundle id to a pid first, then kill it.
+        rc, out, _ = sh([PMD3, "developer", "dvt", "process-id-for-bundle-id",
+                         args.package, "--userspace"])
+        pid = (out.strip().splitlines() or [""])[-1].strip()
+        if rc != 0 or not pid.isdigit() or pid == "0":
+            die(t("%s is not running", "%s 没在运行") % args.package)
+        rc = run([PMD3, "developer", "dvt", "kill", pid, "--userspace"])
+        if rc == 0:
+            print(t("* stopped %s (pid %s)", "* 已停止 %s（pid %s）") % (args.package, pid))
     sys.exit(rc)
 
 
@@ -630,7 +639,7 @@ def main():
     p.set_defaults(func=cmd_launch)
 
     p = sub.add_parser("stop", parents=[common],
-                       help=t("force stop (not on physical iOS)", "强停应用（真机 iOS 不支持）"))
+                       help=t("force stop an app", "强停应用"))
     p.add_argument("package")
     p.set_defaults(func=cmd_stop)
 
