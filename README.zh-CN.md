@@ -72,7 +72,7 @@ mdev info                    # 型号、系统、分辨率、电量
 mdev apps                    # 已装应用（-a 含系统应用）
 mdev install build.apk       # 按设备平台校验扩展名
 mdev launch com.example.app
-mdev log -g Crash            # 实时日志，带过滤
+mdev log -g Crash -n 50      # 最近 50 行匹配日志后退出（脚本里必须带 -n）
 mdev crash --pull ./crashes  # 从 iOS 真机拉 .ips 文件
 mdev shell getprop           # 透传 adb shell
 ```

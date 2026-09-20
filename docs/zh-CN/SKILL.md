@@ -36,7 +36,7 @@ ID   平台         名称                     系统      标识
 | `mdev apps [-a]` | 列应用，默认只列用户应用 |
 | `mdev install <apk/ipa/app>` | 按扩展名和设备平台自动校验 |
 | `mdev uninstall / launch / stop <包名>` | 应用生命周期 |
-| `mdev log [-g 关键词] [-c]` | 实时日志，`-c` 先清缓冲（仅 Android） |
+| `mdev log [-g 关键词] [-n N]` | 日志。**按不了 Ctrl+C 的场合必须带 `-n N`**，否则会一直流。`-c` 先清缓冲（仅 Android） |
 | `mdev crash [--pull 目录]` | 崩溃日志，iOS 真机可拉取 .ips |
 | `mdev url <deeplink>` | 打开深链（iOS 真机不支持） |
 | `mdev shell <命令>` | 透传 adb shell，仅 Android |
@@ -66,8 +66,10 @@ mdev shot
 ```bash
 mdev crash                      # 最近的崩溃报告
 mdev crash --pull ./crashes     # iOS 真机：把 .ips 文件拉到本地
-mdev log -g <关键词>             # 或者实时抓，Ctrl+C 停止
+mdev log -g <关键词> -n 50       # 最近 50 行匹配的日志，然后退出
 ```
+
+**`mdev log` 不带 `-n` 会一直流到 Ctrl+C——而 AI 代理没有 Ctrl+C。** 务必带 `-n N`。这 N 行是什么，三个平台不一样：Android 取自现有的 logcat 缓冲（秒回）；模拟器按时间窗回溯（`--since`，默认 5m）；iOS 真机的 syslog 不存历史，所以取的是**接下来**的 N 行，设备安静时等 `--wait` 秒（默认 20）就放弃。
 
 **双端对比** —— 同一个界面，两台设备：
 

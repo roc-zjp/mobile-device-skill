@@ -39,7 +39,7 @@ Matching accepts short id, name fragment, or UDID prefix - `mdev -d Pixel shot` 
 | `mdev apps [-a]` | Installed apps, user apps only by default |
 | `mdev install <apk/ipa/app>` | Validates extension against device platform |
 | `mdev uninstall / launch / stop <bundle-or-package>` | App lifecycle |
-| `mdev log [-g keyword] [-c]` | Live logs; `-c` clears the buffer first (Android only) |
+| `mdev log [-g kw] [-n N]` | Logs. **Always pass `-n N` when you cannot press Ctrl+C** — without it this streams forever. `-c` clears the buffer first (Android only) |
 | `mdev crash [--pull DIR]` | Crash logs; physical iOS can pull `.ips` files |
 | `mdev url <deeplink>` | Open a deep link (not on physical iOS) |
 | `mdev shell <cmd>` | Pass through to `adb shell`, Android only |
@@ -69,8 +69,10 @@ mdev shot
 ```bash
 mdev crash                      # recent crash reports
 mdev crash --pull ./crashes     # physical iOS: pull the .ips files out
-mdev log -g <keyword>           # or catch it live; Ctrl+C stops the stream
+mdev log -g <keyword> -n 50     # last 50 matching lines, then exits
 ```
+
+**`mdev log` without `-n` streams until Ctrl+C — which an agent does not have.** Always pass `-n N`. What those N lines are differs by platform: on Android they come from the existing logcat buffer (instant); on the simulator from a time window (`--since`, default 5m); on a physical iOS device syslog keeps no history, so they are the *next* N lines and the call gives up after `--wait` seconds (default 20) if the device is quiet.
 
 **Compare both platforms** — same screen, two devices:
 

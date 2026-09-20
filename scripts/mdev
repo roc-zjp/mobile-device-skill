@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 import unicodedata
@@ -531,6 +532,36 @@ def cmd_stop(args):
     sys.exit(rc)
 
 
+def stream_lines(cmd, limit, timeout):
+    """Read at most `limit` lines from a streaming command, then stop it.
+
+    Streaming logs have no natural end - the documented exit is Ctrl+C, which
+    an agent or a script does not have. The timer is the backstop for a device
+    that simply is not logging anything.
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True)
+    timer = threading.Timer(timeout, proc.terminate)
+    timer.start()
+    n = 0
+    try:
+        for line in proc.stdout:
+            print(line.rstrip("\n"))
+            n += 1
+            if n >= limit:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        timer.cancel()
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
+    return n
+
+
 def cmd_log(args):
     dev = resolve(want_device(args))
     p = dev["platform"]
@@ -538,10 +569,24 @@ def cmd_log(args):
         if args.clear:
             sh([ADB, "-s", dev["id"], "logcat", "-c"])
         cmd = [ADB, "-s", dev["id"], "logcat", "-v", "time"]
+        if args.tail:
+            # -d -t N returns the last N lines already in the buffer and exits.
+            cmd += ["-d", "-t", str(args.tail)]
         if args.grep:
             cmd += ["-e", args.grep]
         run(cmd)
     elif p == "ios-sim":
+        if args.tail:
+            # `log show` reads history by time, so take a window and keep the tail.
+            cmd = ["xcrun", "simctl", "spawn", dev["id"], "log", "show",
+                   "--last", args.since, "--style", "compact"]
+            if args.grep:
+                cmd += ["--predicate", 'eventMessage CONTAINS "%s"' % args.grep]
+            _, out, _ = sh(cmd)
+            lines = [l for l in out.splitlines() if l.strip()]
+            for line in lines[-args.tail:]:
+                print(line)
+            return
         cmd = ["xcrun", "simctl", "spawn", dev["id"], "log", "stream", "--style", "compact"]
         if args.grep:
             cmd += ["--predicate", 'eventMessage CONTAINS "%s"' % args.grep]
@@ -552,6 +597,14 @@ def cmd_log(args):
         cmd = [PMD3, "syslog", "live", "--udid", dev["id"]]
         if args.grep:
             cmd += ["-m", args.grep]
+        if args.tail:
+            # syslog keeps no history: these are the next N lines, not the last N.
+            n = stream_lines(cmd, args.tail, args.wait)
+            if n < args.tail:
+                print(t("(stopped after %ds with %d of %d lines - the device was quiet)",
+                        "（等待 %d 秒后停止，收到 %d/%d 行——设备没什么日志）")
+                      % (args.wait, n, args.tail), file=sys.stderr)
+            return
         run(cmd)
 
 
@@ -679,6 +732,16 @@ def main():
     p.add_argument("-g", "--grep", help=t("filter keyword", "过滤关键词"))
     p.add_argument("-c", "--clear", action="store_true",
                    help=t("clear buffer first, Android only", "先清缓冲区，仅 Android"))
+    p.add_argument("-n", "--tail", type=int, metavar="N",
+                   help=t("print N lines and exit instead of streaming - use this "
+                          "from scripts and agents, which have no Ctrl+C",
+                          "打印 N 行后退出，不进入流式——脚本和 AI 代理用这个，它们没有 Ctrl+C"))
+    p.add_argument("--wait", type=int, default=20, metavar="SEC",
+                   help=t("with --tail on a physical iOS device: seconds to wait (default 20)",
+                          "配合 --tail 用于 iOS 真机：最多等待秒数（默认 20）"))
+    p.add_argument("--since", default="5m", metavar="DUR",
+                   help=t("with --tail on the simulator: history window (default 5m)",
+                          "配合 --tail 用于模拟器：回溯时间窗（默认 5m）"))
     p.set_defaults(func=cmd_log)
 
     p = sub.add_parser("crash", parents=[common], help=t("crash logs", "崩溃日志"))

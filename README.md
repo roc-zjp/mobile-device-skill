@@ -72,7 +72,7 @@ mdev info                    # model, OS, resolution, battery
 mdev apps                    # installed apps (-a includes system apps)
 mdev install build.apk       # extension is validated against the device platform
 mdev launch com.example.app
-mdev log -g Crash            # live logs, filtered
+mdev log -g Crash -n 50      # last 50 matching lines then exit (-n is required in scripts)
 mdev crash --pull ./crashes  # pull .ips files off a physical iOS device
 mdev shell getprop           # pass through to adb shell
 ```
