@@ -462,13 +462,44 @@ def cmd_uninstall(args):
     sys.exit(rc)
 
 
+def android_launcher_entries(dev, package):
+    """All LAUNCHER entries a package registers.
+
+    Debug builds routinely register more than one (LeakCanary, Chucker and
+    friends each add a home-screen icon), and `monkey -c LAUNCHER` picks
+    whichever comes first - which may well be the debug tool, not the app.
+    """
+    _, out, _ = sh([ADB, "-s", dev["id"], "shell", "cmd", "package", "query-activities",
+                    "--brief", "-a", "android.intent.action.MAIN",
+                    "-c", "android.intent.category.LAUNCHER"])
+    return [l.strip() for l in out.splitlines() if l.strip().startswith(package + "/")]
+
+
+# Entries belonging to debug tooling rather than the app itself.
+DEBUG_LAUNCHERS = ("leakcanary", "chucker", "flipper", "hyperion", "debugdrawer", "takt")
+
+
 def cmd_launch(args):
     dev = resolve(want_device(args))
     p = dev["platform"]
     if p == "android":
-        # monkey launches by package alone - no need to know the launcher Activity.
-        rc = run([ADB, "-s", dev["id"], "shell", "monkey", "-p", args.package,
-                  "-c", "android.intent.category.LAUNCHER", "1"])
+        if "/" in args.package:                     # explicit package/Activity
+            rc = run([ADB, "-s", dev["id"], "shell", "am", "start", "-n", args.package])
+        else:
+            entries = android_launcher_entries(dev, args.package)
+            real = [e for e in entries
+                    if not any(d in e.lower() for d in DEBUG_LAUNCHERS)]
+            target = (real or entries or [None])[0]
+            if target and len(entries) > 1:
+                print(t("* %d launcher entries; starting %s",
+                        "* 有 %d 个启动入口，选中 %s") % (len(entries), target))
+                for e in entries:
+                    print("    " + e)
+            if target:
+                rc = run([ADB, "-s", dev["id"], "shell", "am", "start", "-n", target])
+            else:                                   # nothing resolved - fall back
+                rc = run([ADB, "-s", dev["id"], "shell", "monkey", "-p", args.package,
+                          "-c", "android.intent.category.LAUNCHER", "1"])
     elif p == "ios-sim":
         rc = run(["xcrun", "simctl", "launch", dev["id"], args.package])
     else:
@@ -635,7 +666,8 @@ def main():
     p.set_defaults(func=cmd_uninstall)
 
     p = sub.add_parser("launch", parents=[common], help=t("launch an app", "启动应用"))
-    p.add_argument("package")
+    p.add_argument("package", help=t("package/bundle id, or package/Activity on Android",
+                                     "包名 / bundle id，Android 也可写 包名/Activity"))
     p.set_defaults(func=cmd_launch)
 
     p = sub.add_parser("stop", parents=[common],

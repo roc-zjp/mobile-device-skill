@@ -115,8 +115,11 @@ The repo doubles as a [Claude Code](https://claude.com/claude-code) skill, so an
 
 ## Status
 
-Verified on macOS 26 against iPadOS 26.6 (physical, wired), and iOS Simulator 26.x.
-The Android paths use standard `adb` invocations but have not yet been exercised on a physical Android device — reports welcome.
+Verified on macOS 26 against a physical iPad (iPadOS 26.7, wired), a physical Pixel Tablet
+(Android 17, wireless debugging) and iOS Simulator 26.x.
+
+One caveat from the Android run: over **wireless debugging** a full-resolution screenshot
+(1600×2560, 4.4 MB) took over two minutes to transfer. Use USB when you need screenshots often.
 
 Linux and Windows: the Android half should work wherever `adb` does; all iOS functionality is macOS-only and is skipped automatically.
 

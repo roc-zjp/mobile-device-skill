@@ -115,8 +115,11 @@ mdev shell getprop           # 透传 adb shell
 
 ## 验证状态
 
-已在 macOS 26 上针对 iPadOS 26.6（真机，有线）和 iOS 模拟器 26.x 验证。
-Android 部分使用标准 `adb` 调用，但尚未在真实 Android 设备上跑过——欢迎反馈。
+已在 macOS 26 上针对 iPad 真机（iPadOS 26.7，有线）、Pixel Tablet 真机（Android 17，无线调试）
+和 iOS 模拟器 26.x 验证。
+
+Android 侧实测出的一条注意事项：**无线调试**下传一张原分辨率截图（1600×2560，4.4 MB）耗时超过两分钟。
+需要频繁截图时请改用 USB。
 
 Linux 与 Windows：Android 那一半在 `adb` 能跑的地方就能跑；所有 iOS 功能仅限 macOS，其他平台会自动跳过。
 
